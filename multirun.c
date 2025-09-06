@@ -148,6 +148,8 @@ int main(const int argc, char** argv, char* const *envp) {
     pid_t child_pid;
     int child_status;
     while ((child_pid = waitpid(-1, &child_status, 0)) > 0 || errno == EINTR) {
+        // Make sure an EINTR in errno will not carry over to the next loop iteration
+        errno = 0;
         // Handles the case where we might've gotten interrupted by a signal
         if (child_pid <= 0) { continue; }
         // Since the child has terminated, remove it from our list of children
