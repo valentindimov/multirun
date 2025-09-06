@@ -17,6 +17,9 @@ static const int fwd_signals[] = {
 static pid_t child_pids[MAX_CHILD_PIDS] = {0};
 static size_t num_child_pids = 0;
 
+/// @brief Adds a PID to the list of child PIDs
+/// @param pid The PID to add.
+/// @return 0 if the addition succeeded; -1 if it fails (due to the list being full)
 static int add_child_pid(pid_t pid) {
     if (num_child_pids >= MAX_CHILD_PIDS) {
         return -1;
@@ -35,6 +38,7 @@ static void remove_child_pid(pid_t pid) {
                 child_pids[j-1] = child_pids[j];
             }
             num_child_pids--;
+            child_pids[num_child_pids] = 0;
             // We could break here, but we're not going to (this lets us handle deleting multiple copies of the same child PID in the list)
         }
     }
@@ -85,6 +89,14 @@ int main(const int argc, char** argv, char* const *envp) {
             child_argv_size++;
         }
         char** child_argv = child_argv_pre + 1;
+
+        // Make sure that we have enough space for the child PID
+        if (num_child_pids >= MAX_CHILD_PIDS) {
+            const char errorMsg[] = "Too many children.\n";
+            write(2, errorMsg, sizeof(errorMsg) - 1);
+            abort();
+        }
+
         // The child process has child_argv_size arguments (excluding the terminating NULL) starting at child_argv.
         const pid_t child_pid = fork();
         if (child_pid < 0) {
@@ -98,7 +110,10 @@ int main(const int argc, char** argv, char* const *envp) {
             exit(1);
         } else {
             // Parent process -> remember the child PID and continue
-            add_child_pid(child_pid);
+            if (add_child_pid(child_pid) != 0) {
+                // This should never happen (because we checked already if we have space for the new PID) but let's check it anyway...
+                abort();
+            }
             // Shift child_argv_pre to the element immediately following the last child arg
             child_argv_pre = child_argv_pre + child_argv_size + 1;
         }
