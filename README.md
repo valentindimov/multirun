@@ -36,6 +36,15 @@ MULTIRUN_ON_FAILURE=ABORT ./multirun -- /bin/echo "Hello World!" -- /bin/sh -c "
 Note that the `SIGTERM` is only sent to the <b>direct</b> children started by `multirun`.
 If one of these children started children of its own, they will not receive a `SIGTERM`. 
 
+## Usage in containers
+`multirun` reaps zombies and forwards some signals (including `SIGINT`, `SIGTERM`, `SIGHUP`,  `SIGQUIT`, `SIGUSR1`, and `SIGUSR2`) to all direct children.
+As such, it should be a (mostly) valid `init` program for containers.
+
+## Should I use this in production?
+No. This is a hobby project, and not a particularly battle-tested one. In production, you're probably better off using a combination of `tini` and `supervisord` to achieve the same goals.
+
+On the other hand, if you, like me, like the idea of creating lean setups with minimalistic tooling and want to use something like `multirun` in a hobby project, I'd appreciate the feedback on how well (or how horribly) it performs.
+
 ## License
 Copyright (c) 2025 Valentin Dimov
 

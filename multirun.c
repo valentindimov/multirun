@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -30,16 +31,33 @@ static int add_child_pid(pid_t pid) {
     }
 }
 
-static void remove_child_pid(pid_t pid) {
+/// @brief Removes all occurrences of a PID from the list of child PIDs
+/// @param pid The PID to remove
+/// @return The same PID if it was found; 0 otherwise.
+static pid_t remove_child_pid(pid_t pid) {
+    pid_t retval = 0;
     for (size_t i = 0; i < num_child_pids && i < MAX_CHILD_PIDS; i++) {
         if (child_pids[i] == pid) {
-            // Found a pid matching the description - shift everything after it back by 1 position and decrease the total number.
+            // Found a pid matching the description
+            retval = pid;
+            // Shift everything after it back by 1 position and decrease the total number.
             for (size_t j = i + 1; j < num_child_pids && i < MAX_CHILD_PIDS; j++) {
                 child_pids[j-1] = child_pids[j];
             }
             num_child_pids--;
             child_pids[num_child_pids] = 0;
             // We could break here, but we're not going to (this lets us handle deleting multiple copies of the same child PID in the list)
+        }
+    }
+    return retval;
+}
+
+/// @brief Sends a signal to all direct children which haven't been awaited yet.
+/// @param signal The signal to send.
+static void signal_all_direct_children(int signal) {
+    for (size_t i = 0; i < num_child_pids && i < MAX_CHILD_PIDS; i++) {
+        if (child_pids[i] > 0) {
+            kill(child_pids[i], signal);
         }
     }
 }
@@ -49,11 +67,7 @@ static void forward_signal(int signal, siginfo_t* siginfo, void* ucontext) {
     (void)(siginfo);
     (void)(ucontext);
     // Forward the signal to all direct children
-    for (size_t i = 0; i < num_child_pids && i < MAX_CHILD_PIDS; i++) {
-        if (child_pids[i] > 0) {
-            kill(child_pids[i], signal);
-        }
-    }
+    signal_all_direct_children(signal);
 }
 
 int main(const int argc, char** argv, char* const *envp) {
@@ -77,6 +91,15 @@ int main(const int argc, char** argv, char* const *envp) {
             write(2, errorMsg, sizeof(errorMsg) - 1);
             abort();
         }
+    }
+
+    // TODO: SIGTTIN/SIGTTOU signal?
+
+    // Set us up as a subreaper (so we're a valid init process for containers)#
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1) != 0) {
+        const char errorMsg[] = "prctl() failed.\n";
+        write(2, errorMsg, sizeof(errorMsg) - 1);
+        abort();
     }
 
     // Start all children in sequence
@@ -128,19 +151,16 @@ int main(const int argc, char** argv, char* const *envp) {
         // Handles the case where we might've gotten interrupted by a signal
         if (child_pid <= 0) { continue; }
         // Since the child has terminated, remove it from our list of children
-        remove_child_pid(child_pid);
-        if (WIFSIGNALED(child_status) || (WIFEXITED(child_status) && WEXITSTATUS(child_status) != 0)) {
-            if (kill_on_failure) {
-                // Make sure we don't send the global SIGTERM twice
-                kill_on_failure = 0;
-                // Send SIGTERM to each of our non-awaited children
-                for (size_t i = 0; i < num_child_pids && i < MAX_CHILD_PIDS; i++) {
-                    if (child_pids[i] > 0) {
-                        kill(child_pids[i], SIGTERM);
-                    }
+        // If it was a direct child (and not a descendant we awaited because we're a subreaper), also trigger the kill-on-failure behavior.
+        if (remove_child_pid(child_pid) > 0) {
+            if (WIFSIGNALED(child_status) || (WIFEXITED(child_status) && WEXITSTATUS(child_status) != 0)) {
+                if (kill_on_failure) {
+                    // Send a SIGTERM to all direct children, but also make sure we don't do that twice
+                    kill_on_failure = 0;
+                    signal_all_direct_children(SIGTERM);
                 }
+                retval = 1;
             }
-            retval = 1;
         }
     }
 
